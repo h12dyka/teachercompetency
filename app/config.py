@@ -46,6 +46,10 @@ class Config:
     if 'wunanendvwxnnehhavyv' in raw_db_url:
         raw_db_url = 'mysql+pymysql://root:@localhost:3306/ukg_db'
 
+    # Guard jika path Linux SQLite (/home/...) tidak sengaja aktif di Windows lokal
+    if os.name == 'nt' and raw_db_url.startswith('sqlite:////home/'):
+        raw_db_url = 'mysql+pymysql://root:@localhost:3306/ukg_db'
+
     if raw_db_url.startswith('postgres://'):
         raw_db_url = raw_db_url.replace('postgres://', 'postgresql+psycopg2://', 1)
     elif raw_db_url.startswith('postgresql://') and not raw_db_url.startswith('postgresql+'):
