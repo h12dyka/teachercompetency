@@ -1,5 +1,7 @@
 import io
-from flask import json, send_file
+import ast
+import json
+from flask import send_file
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -15,6 +17,7 @@ from app.models.audit_log import AuditLog
 from app.services.ai_evaluator import AIEvaluatorService
 from app.services.scoring_engine import ScoringEngine
 from app.services.audit_service import AuditService
+from app.services.email_service import EmailService
 
 evaluations_bp = Blueprint('evaluations', __name__, url_prefix='/evaluations')
 
@@ -40,6 +43,10 @@ def run_evaluation(submission_id):
     submission = Submission.query.get_or_404(submission_id)
     active_version = submission.rubric_version
 
+    if not active_version:
+        flash("Tidak ditemukan versi rubrik aktif untuk materi ini. Mohon aktifkan versi rubrik terlebih dahulu.", 'warning')
+        return redirect(url_for('evaluations.detail', submission_id=submission.id))
+
     if not submission.files:
         flash("Tidak ada berkas proyek yang dapat dianalisis.", 'danger')
         return redirect(url_for('evaluations.detail', submission_id=submission.id))
@@ -48,16 +55,22 @@ def run_evaluation(submission_id):
     submission.status = 'under_ai_review'
     db.session.commit()
 
+    file_meta = {'type': proj_file.file_type, 'extension': proj_file.original_filename.split('.')[-1].lower()}
+    if proj_file.parser_metadata:
+        try:
+            file_meta = json.loads(proj_file.parser_metadata)
+        except Exception:
+            try:
+                file_meta = ast.literal_eval(proj_file.parser_metadata)
+            except Exception:
+                pass
+
     ai_service = AIEvaluatorService()
     eval_res = ai_service.evaluate_submission(
         rubric_version=active_version,
         project_title=submission.project_title,
         extracted_content=proj_file.extracted_text or '',
-        file_metadata=(
-            json.loads(proj_file.parser_metadata) 
-            if proj_file.parser_metadata and proj_file.parser_metadata.startswith('{') 
-            else {'type': proj_file.file_type, 'extension': proj_file.original_filename.split('.')[-1].lower()}
-        )
+        file_metadata=file_meta
     )
 
     if eval_res.get('success'):
@@ -93,10 +106,17 @@ def approve(submission_id):
         teacher_id=submission.teacher_id,
         material_id=submission.material_id
     ).first()
-    if teacher_comp:
-        teacher_comp.status = decision.decision_status
-        teacher_comp.latest_score = decision.final_score
-        teacher_comp.last_evaluated_at = datetime.utcnow()
+    if not teacher_comp:
+        teacher_comp = TeacherCompetency(
+            teacher_id=submission.teacher_id,
+            material_id=submission.material_id,
+            is_required=True
+        )
+        db.session.add(teacher_comp)
+
+    teacher_comp.status = decision.decision_status
+    teacher_comp.latest_score = decision.final_score
+    teacher_comp.last_evaluated_at = datetime.utcnow()
 
     db.session.commit()
     AuditService.log('ADMIN_APPROVAL', 'FinalAssessmentDecision', decision.id, {
@@ -145,10 +165,17 @@ def override(submission_id):
         teacher_id=submission.teacher_id,
         material_id=submission.material_id
     ).first()
-    if teacher_comp:
-        teacher_comp.status = new_status
-        teacher_comp.latest_score = new_score
-        teacher_comp.last_evaluated_at = datetime.utcnow()
+    if not teacher_comp:
+        teacher_comp = TeacherCompetency(
+            teacher_id=submission.teacher_id,
+            material_id=submission.material_id,
+            is_required=True
+        )
+        db.session.add(teacher_comp)
+
+    teacher_comp.status = new_status
+    teacher_comp.latest_score = new_score
+    teacher_comp.last_evaluated_at = datetime.utcnow()
 
     db.session.commit()
 
@@ -376,6 +403,21 @@ def export_rekap_excel():
         as_attachment=True,
         download_name=filename
     )
+    
+    
+@evaluations_bp.route('/<int:submission_id>/send-email', methods=['POST'])
+@login_required
+def send_email_notification(submission_id):
+    submission = Submission.query.get_or_404(submission_id)
+    success, message = EmailService.send_evaluation_result(submission)
+    
+    if success:
+        flash(message, 'success')
+        AuditService.log('SEND_EMAIL_RESULT', 'Submission', submission.id, {'teacher_email': submission.teacher.email})
+    else:
+        flash(message, 'warning')
+        
+    return redirect(url_for('evaluations.detail', submission_id=submission.id))
     
     
     

@@ -41,6 +41,11 @@ class Config:
     
         # Database URI (Mendukung SQLite / Supabase PostgreSQL / MySQL)
     raw_db_url = os.getenv('DATABASE_URL', f"sqlite:///{BASE_DIR / 'ukg.db'}")
+
+    # Fallback otomatis jika kredensial mengarah ke project Supabase lama yang sudah nonaktif/paused
+    if 'wunanendvwxnnehhavyv' in raw_db_url:
+        raw_db_url = 'mysql+pymysql://root:@localhost:3306/ukg_db'
+
     if raw_db_url.startswith('postgres://'):
         raw_db_url = raw_db_url.replace('postgres://', 'postgresql+psycopg2://', 1)
     elif raw_db_url.startswith('postgresql://') and not raw_db_url.startswith('postgresql+'):
@@ -87,3 +92,11 @@ class Config:
     # AI Configuration
     GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
     GEMINI_MODEL = os.getenv('GEMINI_MODEL', 'gemini-3-flash-preview')
+    
+        # Email / SMTP Notification Configuration
+    MAIL_SERVER = os.getenv('MAIL_SERVER', 'smtp.gmail.com')
+    MAIL_PORT = int(os.getenv('MAIL_PORT', 587))
+    MAIL_USE_TLS = os.getenv('MAIL_USE_TLS', 'true').lower() in ('true', '1', 't')
+    MAIL_USERNAME = os.getenv('MAIL_USERNAME', '')
+    MAIL_PASSWORD = os.getenv('MAIL_PASSWORD', '')
+    MAIL_DEFAULT_SENDER = os.getenv('MAIL_DEFAULT_SENDER', 'UKG Sokrates <noreply@sokrates.id>')

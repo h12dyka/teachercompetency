@@ -315,13 +315,13 @@ def delete(material_id):
     code = mat.code
     
     try:
-        db.sessions.delete(mat)
+        db.session.delete(mat)
         db.session.commit()
         AuditService.log('DELETE_MATERIAL', 'UKGMaterial', material_id, {'code': code, 'title': title})
-        flash(f"Materi UKG '{title}' ({code}) beserta rubrik terkiat berhasil dihapus.", 'success')
+        flash(f"Materi UKG '{title}' ({code}) beserta rubrik terkait berhasil dihapus.", 'success')
     except Exception as e:
         db.session.rollback()
         flash(f"Gagal menghapus materi: {str(e)}", 'danger')
         
-    return redirect(url_for('materials.idex'))
+    return redirect(url_for('materials.index'))
  

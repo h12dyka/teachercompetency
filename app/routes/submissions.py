@@ -1,5 +1,6 @@
 import os
 import uuid
+import json
 from pathlib import Path
 from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, jsonify, send_file, abort
 from flask_login import login_required, current_user
@@ -172,7 +173,7 @@ def upload():
             file_size=file_size,
             mime_type=file.content_type,
             extracted_text=parse_result.get('extracted_content', ''),
-            parser_metadata=str(parse_result.get('metadata', {})),
+            parser_metadata=json.dumps(parse_result.get('metadata', {})),
             parse_status='success' if parse_result.get('success') else 'error'
         )
         db.session.add(project_file)
@@ -329,6 +330,10 @@ def download_file(file_id):
 def trigger_ai(submission_id):
     submission = Submission.query.get_or_404(submission_id)
     active_version = submission.rubric_version or (submission.material.rubrics[0].active_version if submission.material.rubrics else None)
+
+    if not active_version:
+        flash("Tidak ditemukan versi rubrik aktif untuk materi ini. Mohon aktifkan versi rubrik terlebih dahulu.", 'warning')
+        return redirect(url_for('evaluations.detail', submission_id=submission.id))
 
     if not submission.files:
         flash("Tidak ada berkas proyek yang dapat dianalisis.", 'danger')

@@ -344,7 +344,11 @@ INSTRUKSI FORMAT OUTPUT JSON:
                 return {'success': False, 'error': "AI tidak mengembalikan respon.", 'is_technical_failure': True}
 
             raw_text = candidates[0].get('content', {}).get('parts', [{}])[0].get('text', '')
-            parsed_data = json.loads(raw_text)
+            clean_text = raw_text.strip()
+            if clean_text.startswith("```"):
+                clean_text = re.sub(r"^```(?:json)?\s*", "", clean_text, flags=re.IGNORECASE)
+                clean_text = re.sub(r"\s*```$", "", clean_text)
+            parsed_data = json.loads(clean_text)
             validated_output = AIEvaluationResponse.model_validate(parsed_data)
 
             # Jika AI menandai berkas bukan proyek yang sah, pastikan semua kriteria bernilai 0.0

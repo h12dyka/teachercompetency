@@ -39,6 +39,16 @@
                 <i class="fa-solid fa-pen-to-square mr-1.5"></i> Koreksi Admin
             </button>
 
+            <!-- Tombol Kirim Email Hasil ke Guru -->
+            <form method="POST" action="{{ url_for('evaluations.send_email_notification', submission_id=submission.id) }}" class="inline">
+                <button type="submit" 
+                        onclick="return confirm('Kirimkan hasil penilaian resmi ini ke email {{ submission.teacher.name }} ({{ submission.teacher.email or 'Email belum diset' }})?')"
+                        class="px-3.5 py-2 text-xs font-semibold rounded-xl bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 shadow-xs flex items-center gap-1.5 transition">
+                    <i class="fa-solid fa-paper-plane text-indigo-600"></i>
+                    <span>Kirim ke Email Guru</span>
+                </button>
+            </form>
+
             <!-- Setujui Hasil AI -->
             {% if decision and not decision.is_approved_by_admin %}
                 <form method="POST" action="{{ url_for('evaluations.approve', submission_id=submission.id) }}" class="inline">

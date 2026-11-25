@@ -3,6 +3,7 @@ import re
 import json
 import logging
 from typing import Dict, Any, List, Optional
+from pathlib import Path
 from pypdf import PdfReader
 from flask import current_app
 
@@ -21,10 +22,45 @@ ROMAN_TO_CLASS = {
     'A': 'TK A', 'B': 'TK B', 'A & B': 'TK A & B'
 }
 
+def clean_extracted_text(txt: str) -> str:
+    """Menyambung kembali teks singkatan yang patah baris akibat font tabel PDF."""
+    t = re.sub(r'S\s*[\r\n]+\s*MP', 'SMP', txt, flags=re.IGNORECASE)
+    t = re.sub(r'S\s*[\r\n]+\s*MA', 'SMA', t, flags=re.IGNORECASE)
+    t = re.sub(r'S\s*[\r\n]+\s*D', 'SD', t, flags=re.IGNORECASE)
+    t = re.sub(r'VI\s*[\r\n]+\s*II', 'VIII', t, flags=re.IGNORECASE)
+    t = re.sub(r'VI\s*[\r\n]+\s*I', 'VII', t, flags=re.IGNORECASE)
+    return t
+
+def infer_grade_level(class_str: str, text: str = "", filename: str = "") -> str:
+    """Memastikan jenjang pendidikan (TK/SD/SMP/SMA) selalu sinkron dan valid 100%."""
+    c_upper = (class_str or '').upper()
+    if any(k in c_upper for k in ['KELAS 7', 'KELAS 8', 'KELAS 9', 'VII', 'VIII', 'IX', 'SMP']):
+        return 'SMP'
+    if any(k in c_upper for k in ['KELAS 10', 'KELAS 11', 'KELAS 12', 'X', 'XI', 'XII', 'SMA', 'SMK']):
+        return 'SMA'
+    if 'TK' in c_upper:
+        return 'TK'
+    if any(k in c_upper for k in ['KELAS 1', 'KELAS 2', 'KELAS 3', 'KELAS 4', 'KELAS 5', 'KELAS 6']) or re.search(r'\b[1-6]\b', c_upper):
+        return 'SD'
+
+    if filename:
+        fn_upper = filename.upper()
+        if re.search(r'[-_]SMP[-_.]|\bSMP\b', fn_upper): return 'SMP'
+        if re.search(r'[-_]SMA[-_.]|[-_]SMK[-_.]|\bSMA\b|\bSMK\b', fn_upper): return 'SMA'
+        if re.search(r'[-_]TK[-_.]|\bTK\b', fn_upper): return 'TK'
+        if re.search(r'[-_]SD[-_.]|\bSD\b', fn_upper): return 'SD'
+
+    t_upper = text[:2500].upper()
+    if 'SMP' in t_upper: return 'SMP'
+    if 'SMA' in t_upper or 'SMK' in t_upper: return 'SMA'
+    if 'TK' in t_upper: return 'TK'
+    return 'SD'
+
+
 class PDFSoalExtractor:
     """
     Menelaah dokumen PDF Paket Soal UKG Sokrates dan memecahnya secara cerdas
-    menjadi daftar modul penugasan per tingkat kelas (SD, SMP, SMA, TK).
+    menjadi daftar modul penugasan per tingkat kelas (TK, SD, SMP, SMA).
     """
 
     def __init__(self, api_key: Optional[str] = None):
@@ -40,10 +76,12 @@ class PDFSoalExtractor:
         for idx, page in enumerate(reader.pages):
             txt = page.extract_text() or ''
             pages_text.append(f"\n<<<HALAMAN_{idx + 1}>>>\n{txt}")
-        return "\n".join(pages_text)
+        raw = "\n".join(pages_text)
+        return clean_extracted_text(raw)
 
     def extract_and_parse(self, pdf_file) -> Dict[str, Any]:
         try:
+            filename = getattr(pdf_file, 'filename', '') or (os.path.basename(str(pdf_file)) if isinstance(pdf_file, (str, Path)) else '')
             full_text = self.extract_full_text(pdf_file)
             if not full_text.strip():
                 return {
@@ -51,12 +89,11 @@ class PDFSoalExtractor:
                     'error': 'Dokumen PDF tidak memuat teks yang dapat dibaca.'
                 }
 
-            # Telaah dan pecah penugasan per tingkatan kelas
-            modules = self._dissect_modules(full_text)
+            modules = self._dissect_modules(full_text, filename)
             if not modules:
                 return {
                     'success': False,
-                    'error': 'Tidak ditemukan pola penugasan SOAL PROYEK di dalam dokumen PDF.'
+                    'error': 'Tidak ditemukan pola penugasan modul di dalam dokumen PDF.'
                 }
 
             return {
@@ -73,23 +110,12 @@ class PDFSoalExtractor:
                 'error': f"Terjadi kesalahan saat memproses PDF: {str(e)}"
             }
 
-    def _dissect_modules(self, full_text: str) -> List[Dict[str, Any]]:
-        # 1. Deteksi Tingkat Global dari Cover Dokumen (IDENTITAS TUGAS)
-        doc_grade = "SD"
-        grade_m = re.search(r'Tingkat\s*:\s*([^\n\r]+)', full_text, re.I)
-        if grade_m:
-            raw_g = grade_m.group(1).strip().upper()
-            if 'SMA' in raw_g or 'SMK' in raw_g: doc_grade = 'SMA'
-            elif 'SMP' in raw_g: doc_grade = 'SMP'
-            elif 'TK' in raw_g: doc_grade = 'TK'
-            elif 'SD' in raw_g: doc_grade = 'SD'
-        else:
-            if 'SMA' in full_text[:400].upper(): doc_grade = 'SMA'
-            elif 'SMP' in full_text[:400].upper(): doc_grade = 'SMP'
-            elif 'TK' in full_text[:400].upper(): doc_grade = 'TK'
+    def _dissect_modules(self, full_text: str, filename: str = "") -> List[Dict[str, Any]]:
+        # 1. Deteksi Jenjang Global dari Cover Dokumen
+        doc_grade = infer_grade_level("", full_text[:2000], filename)
 
         # 2. Deteksi Kelas Global dari Cover Dokumen
-        doc_class = 'Kelas 10' if doc_grade == 'SMA' else ('Kelas 7' if doc_grade == 'SMP' else 'Kelas 1')
+        doc_class = 'Kelas 10' if doc_grade == 'SMA' else ('Kelas 7' if doc_grade == 'SMP' else ('TK A & B' if doc_grade == 'TK' else 'Kelas 1'))
         class_m = re.search(r'Kelas\s*:\s*([^\n\r/]+)', full_text, re.I)
         if class_m:
             raw_c = class_m.group(1).strip().upper()
@@ -97,44 +123,61 @@ class PDFSoalExtractor:
             if not doc_class.lower().startswith('kelas') and not doc_class.lower().startswith('tk'):
                 doc_class = f'Kelas {doc_class}'
 
-        # 3. Deteksi Semester & Mata Pelajaran Global
+        # 3. Deteksi Semester Global
         global_sem = "Semester 1"
         if re.search(r"ganjil\s+dan\s+genap|1\s*&\s*2|1\s+dan\s+2", full_text, re.I):
             global_sem = "Semester 1 & 2"
         elif re.search(r"semester\s*:\s*2|genap", full_text, re.I):
             global_sem = "Semester 2"
 
-        # 4. Pecah teks berdasarkan header "SOAL PROYEK"
-        sections = re.split(r'(?=SOAL PROYEK\s+[^\n\r]+)', full_text, flags=re.IGNORECASE)
-        valid_sections = [s for s in sections if re.match(r'^\s*SOAL PROYEK', s, re.IGNORECASE)]
+        # 4. Pecah teks berdasarkan header penugasan (Mendukung "SOAL PROYEK" dan "PROYEK ... KELAS ...")
+        split_pattern = r'(?=(?:SOAL\s+PROYEK\s+[^\n\r]+|PROYEK[\s\S]{1,150}?KELAS\s+[IVX0-9]+))'
+        raw_sections = re.split(split_pattern, full_text, flags=re.I)
+        valid_sections = [s for s in raw_sections if re.search(r'^\s*SOAL\s+PROYEK|PROYEK[\s\S]{1,150}?KELAS\s+[IVX0-9]+', s, re.I)]
 
         if not valid_sections:
             valid_sections = [full_text]
 
         modules = []
         for idx, sec in enumerate(valid_sections, 1):
-            mod_data = self._parse_single_section(sec, idx, doc_grade, doc_class, global_sem)
+            mod_data = self._parse_single_section(sec, idx, doc_grade, doc_class, global_sem, filename)
             if mod_data:
                 modules.append(mod_data)
 
         return modules
 
-    def _parse_single_section(self, text: str, index: int, def_grade: str, def_class: str, default_sem: str) -> Optional[Dict[str, Any]]:
+    def _parse_single_section(self, text: str, index: int, def_grade: str, def_class: str, default_sem: str, filename: str = "") -> Optional[Dict[str, Any]]:
         grade_level = def_grade
         class_level = def_class
 
-        # Deteksi apakah bagian ini memiliki penugasan spesifik (Contoh: SOAL PROYEK SD I atau SOAL PROYEK SMP VII)
-        sec_h = re.search(r'SOAL PROYEK\s+(TK|SD|SMP|SMA|SMK)\s+([IVX0-9AB\s&-]+?)(?=\r|\n|$)', text, re.I)
+        # Deteksi penugasan spesifik di section ini
+        sec_h = re.search(r'SOAL PROYEK\s+(TK|SD|SMP|SMA|SMK)?\s*([IVX0-9AB\s&-]+?)(?=\r|\n|$)', text, re.I)
         if sec_h:
-            grade_level = sec_h.group(1).strip().upper()
+            if sec_h.group(1):
+                grade_level = sec_h.group(1).strip().upper()
             raw_c = sec_h.group(2).strip().upper()
             class_level = ROMAN_TO_CLASS.get(raw_c, f"Kelas {raw_c}")
+        else:
+            km = re.search(r'KELAS\s+([IVX0-9]+)', text, re.I)
+            if km:
+                raw_c = km.group(1).strip().upper()
+                class_level = ROMAN_TO_CLASS.get(raw_c, f"Kelas {raw_c}")
 
         class_level = re.sub(r'[\r\n]+', ' ', class_level).strip()
 
-        # 2. Judul Proyek, Media, dan Aplikasi
+        # Validasi ulang jenjang berdasarkan kelas agar 100% konsisten
+        grade_level = infer_grade_level(class_level, text, filename)
+
+        # 2. Judul Proyek, Materi, Media, dan Aplikasi
+        mat_m = re.search(r'Materi\s*:\s*([^\n\r]+)', text, re.I)
         p_name_match = re.search(r'Nama Proyek\s*:\s*([^\n\r]+)', text, re.I)
-        project_name = p_name_match.group(1).strip() if p_name_match else "Penerapan Materi Komputer / Informatika"
+
+        if mat_m:
+            project_name = mat_m.group(1).strip()
+        elif p_name_match:
+            project_name = p_name_match.group(1).strip()
+        else:
+            project_name = "Penerapan Materi Komputer / Informatika"
 
         media_match = re.search(r'(?:3\.3\.1\s*)?Media\s*:\s*([^\n\r]+)', text, re.I)
         media_name = media_match.group(1).strip() if media_match else ""
@@ -143,9 +186,9 @@ class PDFSoalExtractor:
         app_match = re.search(r'Aplikasi\s*:\s*([^\n\r]+)', text, re.I)
         app_name = app_match.group(1).strip() if app_match else ""
 
-        title = f"{project_name} ({app_name or media_name})" if (app_name or media_name) else project_name
+        title = f"{project_name} ({app_name or media_name})" if (app_name or media_name) and (app_name or media_name).lower() not in project_name.lower() else project_name
 
-        # 3. Format Berkas (Termasuk bahasa pemrograman C++, Pascal, Python, video, citra, dokumen)
+        # 3. Format Berkas yang Diizinkan
         exts = []
         t_low = text.lower()
         if 'cpp' in t_low or 'c++' in t_low: exts.append('.cpp')
@@ -165,14 +208,13 @@ class PDFSoalExtractor:
         allowed_file_types = ", ".join(list(dict.fromkeys(exts)))
 
         # 4. Rincian Instruksi
-        instructions = ""
-        rincian_match = re.search(r'3\.\s*RINCIAN PROYEK[\s\S]+?(?=4\.\s*WAKTU|5\.\s*KRITERIA|6\.\s*KRITERIA|1\.\s*WAKTU|$)', text, re.I)
+        rincian_match = re.search(r'3\.\s*RINCIAN PROYEK[\s\S]+?(?=4\.\s*WAKTU|5\.\s*KRITERIA|6\.\s*KRITERIA|4\.\s*OUTPUT|1\.\s*WAKTU|$)', text, re.I)
         if rincian_match:
             instructions = rincian_match.group(0).strip()
         else:
-            instructions = f"Pengerjaan proyek {title} menggunakan {app_name or 'aplikasi pemrograman/desain'} sesuai instruksi penugasan."
+            instructions = f"Pengerjaan proyek {title} menggunakan {app_name or 'aplikasi pembelajaran'} sesuai instruksi penugasan."
 
-        # 5. Kode Materi Otomatis (Contoh: UKG-SMA-10, UKG-SMP-07, UKG-SD-01)
+        # 5. Kode Materi Otomatis (Contoh: UKG-SMP-07, UKG-SMP-08, UKG-SMA-10, UKG-SD-01)
         num_m = re.search(r'\d+', class_level)
         num_str = f"{int(num_m.group(0)):02d}" if num_m else f"{index:02d}"
         code = f"UKG-{grade_level}-{num_str}"

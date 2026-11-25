@@ -138,10 +138,17 @@ class ScoringEngine:
             material_id=submission.material_id
         ).first()
 
-        if teacher_comp:
-            teacher_comp.status = decision.decision_status
-            teacher_comp.latest_score = decision.final_score
-            teacher_comp.last_evaluated_at = evaluation.evaluated_at
+        if not teacher_comp:
+            teacher_comp = TeacherCompetency(
+                teacher_id=submission.teacher_id,
+                material_id=submission.material_id,
+                is_required=True
+            )
+            db.session.add(teacher_comp)
+
+        teacher_comp.status = decision.decision_status
+        teacher_comp.latest_score = decision.final_score
+        teacher_comp.last_evaluated_at = evaluation.evaluated_at
 
         db.session.commit()
         return evaluation
