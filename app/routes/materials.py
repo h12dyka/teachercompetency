@@ -225,79 +225,76 @@ def confirm_import():
         allowed_file_types = request.form.get(f'allowed_file_types_{idx}', '').strip()
         passing_grade = float(request.form.get(f'passing_grade_{idx}', 75.0))
 
-        # Cek apakah kode materi sudah ada (jika sudah ada, lakukan update; jika belum, buat baru)
-        material = UKGMaterial.query.filter_by(code=code).first()
-        if not material:
-            material = UKGMaterial(
-                code=code,
-                title=title,
-                grade_level=grade_level,
-                class_level=class_level,
-                semester=semester,
-                academic_year=academic_year,
-                subject=subject,
-                description=description,
-                is_active=True
-            )
-            db.session.add(material)
-            db.session.flush()
-        else:
-            material.title = title
-            material.grade_level = grade_level
-            material.class_level = class_level
-            material.semester = semester
-            material.subject = subject
-            material.description = description
+               # Pastikan kode materi unik agar materi baru selalu BERTAMBAH (tidak menimpa data materi lama)
+        base_code = code
+        counter = 2
+        while UKGMaterial.query.filter_by(code=code).first():
+            code = f"{base_code}-{counter}"
+            counter += 1
 
-        # Buat atau perbarui Rubrik resmi
-        rubric = Rubric.query.filter_by(material_id=material.id).first()
-        if not rubric:
-            rubric = Rubric(
-                material_id=material.id,
-                title=f"Rubrik Penilaian UKG - {title}",
-                description=description,
-                project_instructions=project_instructions,
-                competencies_measured=competencies_measured,
-                passing_grade=passing_grade,
-                allowed_file_types=allowed_file_types,
-                created_by_id=current_user.id
-            )
-            db.session.add(rubric)
-            db.session.flush()
+        # 1. Selalu buat materi UKG baru
+        material = UKGMaterial(
+            code=code,
+            title=title,
+            grade_level=grade_level,
+            class_level=class_level,
+            semester=semester,
+            academic_year=academic_year,
+            subject=subject,
+            description=description,
+            is_active=True
+        )
+        db.session.add(material)
+        db.session.flush()
 
-            version = RubricVersion(
-                rubric_id=rubric.id,
-                version_number=1,
-                version_label='v1.0',
-                status='active',
-                effective_date=date.today(),
-                change_notes='Otomatis diekstrak per tingkatan kelas dari PDF Soal UKG',
-                approved_by_id=current_user.id,
-                approved_at=datetime.utcnow()
-            )
-            db.session.add(version)
-            db.session.flush()
+        # 2. Selalu buat Rubrik resmi baru yang terikat khusus ke materi ini
+        rubric = Rubric(
+            material_id=material.id,
+            title=f"Rubrik Penilaian UKG - {title}",
+            description=description,
+            project_instructions=project_instructions,
+            competencies_measured=competencies_measured,
+            passing_grade=passing_grade,
+            allowed_file_types=allowed_file_types,
+            created_by_id=current_user.id
+        )
+        db.session.add(rubric)
+        db.session.flush()
 
-            # Standar 3 Kriteria Sokrates: 70%, 20%, 10%
-            default_criteria = [
-                ("Ide / Kreatifitas / Tehnik", 70.0, True, 70.0, f"Kesesuaian teknis pengerjaan {title}"),
-                ("Kerapihan", 20.0, False, 60.0, "Kerapihan tata letak berkas tugas"),
-                ("Tema", 10.0, False, 60.0, "Kesesuaian karya terhadap tema UKG")
-            ]
-            for c_idx, (c_name, c_weight, c_mand, c_min, c_ind) in enumerate(default_criteria, 1):
-                crit = RubricCriterion(
-                    version_id=version.id,
-                    name=c_name,
-                    description=f"Aspek {c_name} untuk {class_level}",
-                    weight=c_weight,
-                    scale_min=0.0,
-                    scale_max=100.0,
-                    is_mandatory=c_mand,
-                    mandatory_min_score=c_min,
-                    evidence_indicators=c_ind,
-                    sort_order=c_idx
-                )
-                db.session.add(crit)
+        # 3. Buat Versi Rubrik v1.0
+        version = RubricVersion(
+            rubric_id=rubric.id,
+            version_number=1,
+            version_label='v1.0',
+            status='active',
+            effective_date=date.today(),
+            change_notes='Otomatis diekstrak per tingkatan kelas dari PDF Soal UKG',
+            approved_by_id=current_user.id,
+            approved_at=datetime.utcnow()
+        )
+        db.session.add(version)
+        db.session.flush()
+
+        # 4. Buat 3 Kriteria Standar Sokrates (70% Ide/Teknik, 20% Kerapihan, 10% Tema)
+        default_criteria = [
+            ("Ide / Kreatifitas / Tehnik", 70.0, True, 70.0, f"Kesesuaian teknis pengerjaan {title}"),
+            ("Kerapihan", 20.0, False, 60.0, "Kerapihan tata letak berkas tugas"),
+            ("Tema", 10.0, False, 60.0, "Kesesuaian karya terhadap tema UKG")
+        ]
+        for c_idx, (c_name, c_weight, c_mand, c_min, c_ind) in enumerate(default_criteria, 1):
+            crit = RubricCriterion(
+                version_id=version.id,
+                name=c_name,
+                description=f"Aspek {c_name} untuk {class_level}",
+                weight=c_weight,
+                scale_min=0.0,
+                scale_max=100.0,
+                is_mandatory=c_mand,
+                mandatory_min_score=c_min,
+                evidence_indicators=c_ind,
+                sort_order=c_idx
+            )
+            db.session.add(crit)
 
         saved_count += 1
 
