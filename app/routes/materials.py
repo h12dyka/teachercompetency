@@ -164,47 +164,99 @@ def edit(material_id):
 
     return render_template('materials/form.html', material=mat, form_data={})
 
+def _safe_float(val, default: float) -> float:
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
+
+def _list_existing_soal_pdfs(upload_dir: str):
+    if not os.path.isdir(upload_dir):
+        return []
+    files = []
+    for name in sorted(os.listdir(upload_dir)):
+        if name.lower().endswith('.pdf'):
+            full = os.path.join(upload_dir, name)
+            if os.path.isfile(full):
+                files.append({
+                    'name': name,
+                    'path': full,
+                    'size_kb': round(os.path.getsize(full) / 1024, 1)
+                })
+    return files
+
+
 @materials_bp.route('/import-pdf', methods=['GET', 'POST'])
 @login_required
 def import_pdf():
+    upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'soal_pdf')
+    existing_pdfs = _list_existing_soal_pdfs(upload_dir)
+
     if request.method == 'POST':
-        if 'pdf_file' not in request.files:
-            flash('Pilih berkas PDF soal terlebih dahulu.', 'warning')
-            return redirect(request.url)
+        analyze_existing = request.form.get('analyze_existing') == '1'
+        selected_existing = request.form.getlist('existing_files[]')
+        saved_paths = []
 
-        file = request.files['pdf_file']
-        if file.filename == '' or not file.filename.lower().endswith('.pdf'):
-            flash('Format berkas harus berupa dokumen PDF (.pdf).', 'danger')
-            return redirect(request.url)
+        if analyze_existing:
+            if selected_existing:
+                allowed_map = {item['name']: item['path'] for item in existing_pdfs}
+                saved_paths = [allowed_map[n] for n in selected_existing if n in allowed_map]
+            else:
+                saved_paths = [item['path'] for item in existing_pdfs]
 
-        upload_dir = os.path.join(current_app.config['UPLOAD_FOLDER'], 'soal_pdf')
-        os.makedirs(upload_dir, exist_ok=True)
-        safe_name = secure_filename(file.filename)
-        saved_path = os.path.join(upload_dir, safe_name)
-        file.save(saved_path)
+            if not saved_paths:
+                flash('Tidak ditemukan berkas PDF di folder soal_pdf.', 'warning')
+                return redirect(request.url)
+        else:
+            uploaded_files = request.files.getlist('pdf_files') or request.files.getlist('pdf_file')
+            valid_uploads = [f for f in uploaded_files if f and f.filename]
+            if not valid_uploads:
+                flash('Pilih minimal satu berkas PDF soal terlebih dahulu.', 'warning')
+                return redirect(request.url)
+
+            os.makedirs(upload_dir, exist_ok=True)
+            for file in valid_uploads:
+                if not file.filename.lower().endswith('.pdf'):
+                    flash(f"Berkas '{file.filename}' dilewati karena bukan format .pdf.", 'warning')
+                    continue
+                safe_name = secure_filename(file.filename)
+                saved_path = os.path.join(upload_dir, safe_name)
+                file.save(saved_path)
+                saved_paths.append(saved_path)
+
+            if not saved_paths:
+                flash('Format berkas harus berupa dokumen PDF (.pdf).', 'danger')
+                return redirect(request.url)
 
         extractor = PDFSoalExtractor()
-        result = extractor.extract_and_parse(saved_path)
+        result = extractor.analyze_multiple_pdfs(saved_paths)
 
         if not result.get('success'):
             flash(f"Gagal membaca PDF: {result.get('error')}", 'danger')
             return redirect(request.url)
 
         modules = result.get('modules', [])
+        file_reports = result.get('file_reports', [])
+        source_names = ", ".join(r['filename'] for r in file_reports)
+
         return render_template(
             'materials/import_review.html',
             modules=modules,
-            source_file=safe_name,
-            total_modules=len(modules)
+            source_file=source_names,
+            total_modules=len(modules),
+            file_reports=file_reports,
+            unit_matrix=result.get('unit_matrix', {}),
+            cross_file_report=result.get('cross_file_report', {})
         )
 
-    return render_template('materials/import_form.html')
+    return render_template('materials/import_form.html', existing_pdfs=existing_pdfs)
 
 
 @materials_bp.route('/import-pdf/confirm', methods=['POST'])
 @login_required
 def confirm_import():
-    # Ambil seluruh array modul yang dicentang oleh Tuan di halaman review
+    # Ambil seluruh array modul yang dicentang pada halaman review
     selected_indexes = request.form.getlist('selected_modules[]')
     if not selected_indexes:
         flash("Tidak ada modul kelas yang dipilih untuk diimpor.", 'warning')
@@ -212,24 +264,38 @@ def confirm_import():
 
     saved_count = 0
     for idx in selected_indexes:
-        code = request.form.get(f'code_{idx}', '').strip().upper()
-        title = request.form.get(f'title_{idx}', '').strip()
-        grade_level = request.form.get(f'grade_level_{idx}', 'SD').strip()
-        class_level = request.form.get(f'class_level_{idx}', '').strip()
-        semester = request.form.get(f'semester_{idx}', 'Semester 1').strip()
-        academic_year = request.form.get(f'academic_year_{idx}', '2025/2026').strip()
-        subject = request.form.get(f'subject_{idx}', 'Komputer Dasar').strip()
+        code = request.form.get(f'code_{idx}', '').strip().upper()[:45]
+        title = request.form.get(f'title_{idx}', '').strip()[:150]
+        grade_level = request.form.get(f'grade_level_{idx}', 'SD').strip()[:50]
+        class_level = request.form.get(f'class_level_{idx}', '').strip()[:50]
+        semester = request.form.get(f'semester_{idx}', 'Semester 1').strip()[:30]
+        academic_year = request.form.get(f'academic_year_{idx}', '2025/2026').strip()[:50]
+        subject = request.form.get(f'subject_{idx}', 'Komputer Dasar').strip()[:100]
         description = request.form.get(f'description_{idx}', '').strip()
         project_instructions = request.form.get(f'project_instructions_{idx}', '').strip()
         competencies_measured = request.form.get(f'competencies_measured_{idx}', '').strip()
-        allowed_file_types = request.form.get(f'allowed_file_types_{idx}', '').strip()
-        passing_grade = float(request.form.get(f'passing_grade_{idx}', 75.0))
+        raw_allowed = request.form.get(f'allowed_file_types_{idx}', '').strip()
+        passing_grade = _safe_float(request.form.get(f'passing_grade_{idx}', 75.0), 75.0)
+        source_file = request.form.get(f'source_file_{idx}', '').strip()
 
-               # Pastikan kode materi unik agar materi baru selalu BERTAMBAH (tidak menimpa data materi lama)
+        if not raw_allowed or raw_allowed.lower() == 'belum tersedia':
+            allowed_file_types = '.pdf, .docx, .pptx, .jpg, .png, .zip'
+            format_note = ' | Format berkas belum tercantum di PDF, memakai ekstensi umum sementara.'
+        else:
+            allowed_file_types = raw_allowed[:255]
+            format_note = ''
+
+        if not code:
+            code = f"UKG-{grade_level}-{idx}"[:45]
+        if not title:
+            title = f"[{grade_level} {class_level}] Materi UKG"[:150]
+
+        # Pastikan kode materi unik agar materi baru selalu BERTAMBAH (tidak menimpa data materi lama)
         base_code = code
         counter = 2
         while UKGMaterial.query.filter_by(code=code).first():
-            code = f"{base_code}-{counter}"
+            suffix = f"-{counter}"
+            code = f"{base_code[:50 - len(suffix)]}{suffix}"
             counter += 1
 
         # 1. Selalu buat materi UKG baru
@@ -250,10 +316,10 @@ def confirm_import():
         # 2. Selalu buat Rubrik resmi baru yang terikat khusus ke materi ini
         rubric = Rubric(
             material_id=material.id,
-            title=f"Rubrik Penilaian UKG - {title}",
+            title=f"Rubrik Penilaian UKG - {title}"[:200],
             description=description,
-            project_instructions=project_instructions,
-            competencies_measured=competencies_measured,
+            project_instructions=project_instructions or f"Pengerjaan proyek {title}.",
+            competencies_measured=competencies_measured or f"Kompetensi Profesional Teknikal ({grade_level} {class_level})",
             passing_grade=passing_grade,
             allowed_file_types=allowed_file_types,
             created_by_id=current_user.id
@@ -262,30 +328,52 @@ def confirm_import():
         db.session.flush()
 
         # 3. Buat Versi Rubrik v1.0
+        change_note = f"Diekstrak otomatis dari PDF Soal UKG ({source_file or 'Unggahan PDF'}){format_note}"
         version = RubricVersion(
             rubric_id=rubric.id,
             version_number=1,
             version_label='v1.0',
             status='active',
             effective_date=date.today(),
-            change_notes='Otomatis diekstrak per tingkatan kelas dari PDF Soal UKG',
+            change_notes=change_note,
             approved_by_id=current_user.id,
             approved_at=datetime.utcnow()
         )
         db.session.add(version)
         db.session.flush()
 
-        # 4. Buat 3 Kriteria Standar Sokrates (70% Ide/Teknik, 20% Kerapihan, 10% Tema)
-        default_criteria = [
-            ("Ide / Kreatifitas / Tehnik", 70.0, True, 70.0, f"Kesesuaian teknis pengerjaan {title}"),
-            ("Kerapihan", 20.0, False, 60.0, "Kerapihan tata letak berkas tugas"),
-            ("Tema", 10.0, False, 60.0, "Kesesuaian karya terhadap tema UKG")
-        ]
-        for c_idx, (c_name, c_weight, c_mand, c_min, c_ind) in enumerate(default_criteria, 1):
+        # 4. Gunakan Kriteria & Bobot Dinamis dari hasil ekstraksi PDF / review form
+        crit_names = request.form.getlist(f'crit_name_{idx}[]')
+        crit_weights = request.form.getlist(f'crit_weight_{idx}[]')
+        crit_mandatories = request.form.getlist(f'crit_mandatory_{idx}[]')
+        crit_min_scores = request.form.getlist(f'crit_min_score_{idx}[]')
+        crit_indicators = request.form.getlist(f'crit_indicator_{idx}[]')
+        crit_descriptions = request.form.getlist(f'crit_description_{idx}[]')
+
+        parsed_criteria = []
+        for c_pos, raw_name in enumerate(crit_names):
+            c_name = (raw_name or '').strip()
+            if not c_name:
+                continue
+            c_weight = _safe_float(crit_weights[c_pos] if c_pos < len(crit_weights) else 0, 0.0)
+            c_mand = (crit_mandatories[c_pos] == '1') if c_pos < len(crit_mandatories) else False
+            c_min = _safe_float(crit_min_scores[c_pos] if c_pos < len(crit_min_scores) else 60.0, 60.0)
+            c_ind = (crit_indicators[c_pos] if c_pos < len(crit_indicators) else '').strip() or c_name
+            c_desc = (crit_descriptions[c_pos] if c_pos < len(crit_descriptions) else '').strip() or f"Aspek {c_name} untuk {class_level}"
+            parsed_criteria.append((c_name[:150], c_weight, c_mand, c_min, c_ind, c_desc))
+
+        if not parsed_criteria:
+            parsed_criteria = [
+                ("Ide / Kreatifitas / Tehnik", 70.0, True, 70.0, f"Kesesuaian teknis pengerjaan {title}", f"Aspek teknikal untuk {class_level}"),
+                ("Kerapihan", 20.0, False, 60.0, "Kerapihan tata letak berkas tugas", f"Aspek kerapihan untuk {class_level}"),
+                ("Tema", 10.0, False, 60.0, "Kesesuaian karya terhadap tema UKG", f"Aspek tema untuk {class_level}")
+            ]
+
+        for c_idx, (c_name, c_weight, c_mand, c_min, c_ind, c_desc) in enumerate(parsed_criteria, 1):
             crit = RubricCriterion(
                 version_id=version.id,
                 name=c_name,
-                description=f"Aspek {c_name} untuk {class_level}",
+                description=c_desc,
                 weight=c_weight,
                 scale_min=0.0,
                 scale_max=100.0,

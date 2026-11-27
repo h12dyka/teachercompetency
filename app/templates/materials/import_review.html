@@ -1,40 +1,228 @@
 {% extends "base.html" %}
 
-{% block title %}Tinjau Pembagian Modul Soal UKG{% endblock %}
+{% block title %}Hasil Analisis & Pemetaan Modul Soal UKG{% endblock %}
 
 {% block content %}
-<div class="max-w-5xl mx-auto space-y-6 mt-2">
+<div class="max-w-6xl mx-auto space-y-6 mt-2">
     
     <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
             <a href="{{ url_for('materials.import_pdf') }}" class="text-xs text-indigo-600 hover:text-indigo-800 font-semibold flex items-center mb-1">
-                <i class="fa-solid fa-arrow-left mr-1.5"></i> Unggah Dokumen Lain
+                <i class="fa-solid fa-arrow-left mr-1.5"></i> Unggah / Pilih Dokumen Lain
             </a>
-            <h1 class="text-2xl font-black text-slate-900 tracking-tight">Hasil Telaah Modul per Tingkat Kelas</h1>
+            <h1 class="text-2xl font-black text-slate-900 tracking-tight">Hasil Analisis Menyeluruh &amp; Pemetaan Unit Pendidikan</h1>
             <p class="text-xs text-slate-500 mt-0.5">
-                Ditemukan <strong class="text-indigo-600">{{ total_modules }} Penugasan Kelas Berbeda</strong> dari berkas <span class="font-bold text-slate-800">{{ source_file }}</span>.
+                Ditemukan <strong class="text-indigo-600">{{ total_modules }} Modul Penugasan</strong> dari
+                <strong class="text-slate-800">{{ file_reports|length }} Berkas PDF</strong>.
             </p>
         </div>
     </div>
 
+    <!-- 1. Laporan Analisis File & Keterkaitan Lintas PDF -->
+    {% if cross_file_report %}
+    <div class="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-5 space-y-4">
+        <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h2 class="text-sm font-extrabold text-slate-900 flex items-center gap-2">
+                <i class="fa-solid fa-file-shield text-indigo-600"></i>
+                Ringkasan Pemeriksaan Berkas &amp; Perbedaan Ketentuan
+            </h2>
+            <div class="flex items-center gap-2 text-xs">
+                <span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-700 font-semibold">
+                    Total File: {{ cross_file_report.total_files }}
+                </span>
+                <span class="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 font-semibold">
+                    File Unik: {{ cross_file_report.unique_files }}
+                </span>
+            </div>
+        </div>
+
+        <!-- Tabel Status Per File -->
+        {% if file_reports %}
+        <div class="overflow-x-auto">
+            <table class="w-full text-xs text-left border-collapse">
+                <thead>
+                    <tr class="bg-slate-50 text-slate-600 border-b border-slate-200">
+                        <th class="py-2 px-3 font-bold">Nama File PDF</th>
+                        <th class="py-2 px-3 font-bold">Hal.</th>
+                        <th class="py-2 px-3 font-bold">Unit</th>
+                        <th class="py-2 px-3 font-bold">Modul</th>
+                        <th class="py-2 px-3 font-bold">Metode</th>
+                        <th class="py-2 px-3 font-bold">Catatan / Status</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-slate-100">
+                    {% for rep in file_reports %}
+                    <tr class="hover:bg-slate-50/70">
+                        <td class="py-2 px-3 font-semibold text-slate-800">{{ rep.filename }}</td>
+                        <td class="py-2 px-3 text-slate-500">{{ rep.page_count }}</td>
+                        <td class="py-2 px-3">
+                            {% for u in rep.detected_units %}
+                                <span class="inline-block px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 font-bold text-[10px]">{{ u }}</span>
+                            {% else %}
+                                <span class="text-slate-400">-</span>
+                            {% endfor %}
+                        </td>
+                        <td class="py-2 px-3 font-bold text-slate-700">{{ rep.module_count }}</td>
+                        <td class="py-2 px-3">
+                            <span class="px-2 py-0.5 rounded text-[10px] font-bold
+                                {% if 'ai' in rep.method %}bg-emerald-50 text-emerald-700{% elif rep.method == 'error' %}bg-rose-50 text-rose-700{% else %}bg-amber-50 text-amber-700{% endif %}">
+                                {{ rep.method }}
+                            </span>
+                        </td>
+                        <td class="py-2 px-3 text-slate-600">
+                            {% if rep.is_duplicate %}
+                                <span class="text-amber-700 font-semibold">
+                                    <i class="fa-solid fa-clone mr-1"></i> Duplikat biner identik dengan {{ rep.duplicate_of }} (modul tidak digandakan)
+                                </span>
+                            {% elif rep.error %}
+                                <span class="text-rose-600 font-semibold">{{ rep.error }}</span>
+                            {% else %}
+                                {{ rep.document_summary }}
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <!-- Peringatan Duplikat, Gap Kelas, & Inkonsistensi -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs">
+            <div class="p-3.5 rounded-xl bg-amber-50/70 border border-amber-200 space-y-1.5">
+                <p class="font-bold text-amber-900 flex items-center gap-1.5">
+                    <i class="fa-solid fa-triangle-exclamation text-amber-600"></i>
+                    Informasi Belum Tersedia ({{ cross_file_report.missing_slots|length }})
+                </p>
+                {% if cross_file_report.missing_slots %}
+                    <ul class="list-disc list-inside text-amber-800 space-y-0.5 max-h-36 overflow-y-auto">
+                        {% for item in cross_file_report.missing_slots %}
+                            <li>{{ item }}</li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p class="text-amber-700">Semua slot kelas SD, SMP, dan SMA memiliki materi.</p>
+                {% endif %}
+            </div>
+
+            <div class="p-3.5 rounded-xl bg-rose-50/70 border border-rose-200 space-y-1.5">
+                <p class="font-bold text-rose-900 flex items-center gap-1.5">
+                    <i class="fa-solid fa-bug text-rose-600"></i>
+                    Inkonsistensi Internal PDF ({{ cross_file_report.inconsistencies|length }})
+                </p>
+                {% if cross_file_report.inconsistencies %}
+                    <ul class="list-disc list-inside text-rose-800 space-y-0.5 max-h-36 overflow-y-auto">
+                        {% for inc in cross_file_report.inconsistencies %}
+                            <li>{{ inc }}</li>
+                        {% endfor %}
+                    </ul>
+                {% else %}
+                    <p class="text-rose-700">Tidak terdeteksi ketidaksesuaian internal pada berkas.</p>
+                {% endif %}
+            </div>
+
+            <div class="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                <p class="font-bold text-slate-900 flex items-center gap-1.5">
+                    <i class="fa-solid fa-scale-balanced text-indigo-600"></i>
+                    Variasi Ketentuan Lintas PDF
+                </p>
+                <div class="text-slate-700 space-y-1 max-h-36 overflow-y-auto">
+                    <p><strong>Timeline:</strong> {{ cross_file_report.timelines|join(', ') }}</p>
+                    <p><strong>Tujuan Kirim:</strong> {{ cross_file_report.submission_emails|join(', ') }}</p>
+                    <p><strong>Skema Bobot:</strong> {{ cross_file_report.scoring_schemes|length }} variasi rubrik</p>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 2. Matriks Pemetaan Materi Berdasarkan Unit Pendidikan (SD, SMP, SMA, dst.) -->
+    {% if unit_matrix %}
+    <div class="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-5 space-y-4">
+        <h2 class="text-sm font-extrabold text-slate-900 flex items-center gap-2 border-b border-slate-100 pb-3">
+            <i class="fa-solid fa-sitemap text-emerald-600"></i>
+            Pemetaan Materi Berdasarkan Unit Pendidikan (SD, SMP, SMA)
+        </h2>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            {% for unit_name, rows in unit_matrix.items() %}
+            <div class="rounded-xl border border-slate-200 overflow-hidden">
+                <div class="px-4 py-2.5 bg-slate-900 text-white text-xs font-extrabold flex items-center justify-between">
+                    <span>Unit {{ unit_name }}</span>
+                    <span class="text-[11px] font-normal text-slate-300">{{ rows|length }} Tingkatan</span>
+                </div>
+                <div class="divide-y divide-slate-100 text-xs">
+                    {% for row in rows %}
+                    <div class="p-3 {{ 'bg-white' if row.is_available else 'bg-amber-50/40' }}">
+                        <div class="flex items-center justify-between mb-1">
+                            <span class="font-bold text-slate-800">{{ row.class_level }}</span>
+                            {% if row.is_available %}
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                                    {{ row.status_label }}
+                                </span>
+                            {% else %}
+                                <span class="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300">
+                                    Informasi belum tersedia
+                                </span>
+                            {% endif %}
+                        </div>
+
+                        {% if row.is_available %}
+                            <ul class="space-y-1 text-[11px] text-slate-600">
+                                {% for m in row.modules %}
+                                <li class="flex items-start gap-1.5">
+                                    <span class="text-indigo-500 mt-0.5">&bull;</span>
+                                    <div>
+                                        <span class="font-semibold text-slate-800">{{ m.title }}</span>
+                                        <span class="text-slate-400">({{ m.semester_raw or m.semester }} &bull; {{ m.applications }})</span>
+                                    </div>
+                                </li>
+                                {% endfor %}
+                            </ul>
+                            {% if row.missing_semesters %}
+                                <p class="mt-1 text-[10px] font-semibold text-amber-700">
+                                    <i class="fa-solid fa-circle-info mr-1"></i> {{ row.missing_semesters|join(', ') }}
+                                </p>
+                            {% endif %}
+                        {% endif %}
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    <!-- 3. Form Review & Edit Modul Beserta Kriteria Rubrik Asli -->
     <form method="POST" action="{{ url_for('materials.confirm_import') }}" class="space-y-6">
         
         <div class="grid grid-cols-1 gap-5">
             {% for mod in modules %}
                 {% set loop_idx = loop.index0 %}
-                <div class="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-6 space-y-4 transition hover:border-indigo-300">
-                    <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div class="bg-white rounded-2xl border border-slate-200/90 shadow-xs p-6 space-y-4 transition hover:border-indigo-300"
+                     x-data="{ criteriaList: {{ mod.criteria | tojson | forceescape }} }">
+                    <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
                         <div class="flex items-center space-x-3">
                             <input type="checkbox" name="selected_modules[]" value="{{ loop_idx }}" checked
                                    class="w-4 h-4 rounded text-indigo-600 border-slate-300">
                             <div>
-                                <span class="text-xs font-bold text-indigo-600 uppercase tracking-wider block">Modul #{{ loop.index }}</span>
+                                <span class="text-xs font-bold text-indigo-600 uppercase tracking-wider block">
+                                    Modul #{{ loop.index }} &bull; {{ mod.source_file or source_file }} ({{ mod.source_pages or '-' }})
+                                </span>
                                 <h2 class="text-base font-extrabold text-slate-900">{{ mod.class_level }} &bull; {{ mod.title }}</h2>
                             </div>
                         </div>
-                        <span class="px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
-                            {{ mod.grade_level }}
-                        </span>
+                        <div class="flex items-center gap-2">
+                            <span class="px-2.5 py-1 rounded-lg text-xs font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                {{ mod.grade_level }}
+                            </span>
+                            {% if mod.curriculum_track and mod.curriculum_track != 'Belum tersedia' %}
+                            <span class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700">
+                                {{ mod.curriculum_track }}
+                            </span>
+                            {% endif %}
+                        </div>
                     </div>
 
                     <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
@@ -49,7 +237,7 @@
                                    class="w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg font-semibold text-slate-800">
                         </div>
                         <div>
-                            <label class="block font-semibold text-slate-600 mb-1">Tingkat & Kelas</label>
+                            <label class="block font-semibold text-slate-600 mb-1">Tingkat &amp; Kelas</label>
                             <div class="flex space-x-1.5">
                                 <input type="text" name="grade_level_{{ loop_idx }}" value="{{ mod.grade_level }}" class="w-16 px-2 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-center font-bold">
                                 <input type="text" name="class_level_{{ loop_idx }}" value="{{ mod.class_level }}" class="w-full px-2 py-1.5 bg-slate-50 border border-slate-300 rounded-lg font-bold">
@@ -57,14 +245,14 @@
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                    <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
                         <div>
-                            <label class="block font-semibold text-slate-600 mb-1">Mata Pelajaran / Aplikasi</label>
+                            <label class="block font-semibold text-slate-600 mb-1">Mata Pelajaran</label>
                             <input type="text" name="subject_{{ loop_idx }}" value="{{ mod.subject }}"
                                    class="w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg">
                         </div>
                         <div>
-                            <label class="block font-semibold text-slate-600 mb-1">Semester & T.A.</label>
+                            <label class="block font-semibold text-slate-600 mb-1">Semester &amp; T.A.</label>
                             <div class="flex space-x-1.5">
                                 <input type="text" name="semester_{{ loop_idx }}" value="{{ mod.semester }}" class="w-full px-2 py-1.5 bg-slate-50 border border-slate-300 rounded-lg">
                                 <input type="text" name="academic_year_{{ loop_idx }}" value="{{ mod.academic_year }}" class="w-24 px-2 py-1.5 bg-slate-50 border border-slate-300 rounded-lg">
@@ -75,24 +263,116 @@
                             <input type="text" name="allowed_file_types_{{ loop_idx }}" value="{{ mod.allowed_file_types }}" required
                                    class="w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg font-bold text-emerald-700">
                         </div>
+                        <div>
+                            <label class="block font-semibold text-slate-600 mb-1">Passing Grade</label>
+                            <input type="number" step="0.5" min="0" max="100" name="passing_grade_{{ loop_idx }}" value="{{ mod.passing_grade }}"
+                                   class="w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg font-bold text-slate-800">
+                        </div>
                     </div>
+
+                    <!-- Metadata Tambahan Hasil Pembacaan Menyeluruh -->
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px] bg-slate-50 rounded-xl p-3 border border-slate-200/70">
+                        <div><span class="font-bold text-slate-600">Aplikasi:</span> <span class="text-slate-800">{{ mod.applications }}</span></div>
+                        <div><span class="font-bold text-slate-600">Waktu/Timeline:</span> <span class="text-slate-800">{{ mod.timeline }}</span></div>
+                        <div><span class="font-bold text-slate-600">Pengiriman:</span> <span class="text-slate-800">{{ mod.submission_email }}</span></div>
+                        <div class="sm:col-span-3"><span class="font-bold text-slate-600">Kompetensi:</span> <span class="text-slate-800">{{ mod.competencies_measured }}</span></div>
+                    </div>
+
+                    {% if mod.missing_info or mod.internal_inconsistencies %}
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                        {% if mod.missing_info %}
+                        <div class="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-900">
+                            <span class="font-bold block mb-0.5"><i class="fa-solid fa-circle-question mr-1"></i> Info Belum Tersedia di PDF:</span>
+                            <ul class="list-disc list-inside space-y-0.5">
+                                {% for mi in mod.missing_info %}<li>{{ mi }}</li>{% endfor %}
+                            </ul>
+                        </div>
+                        {% endif %}
+                        {% if mod.internal_inconsistencies %}
+                        <div class="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-900">
+                            <span class="font-bold block mb-0.5"><i class="fa-solid fa-triangle-exclamation mr-1"></i> Inkonsistensi Internal:</span>
+                            <ul class="list-disc list-inside space-y-0.5">
+                                {% for inc in mod.internal_inconsistencies %}<li>{{ inc }}</li>{% endfor %}
+                            </ul>
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
 
                     <div class="text-xs">
                         <label class="block font-semibold text-slate-600 mb-1">Rincian Instruksi Tugas</label>
-                        <textarea name="project_instructions_{{ loop_idx }}" rows="2"
+                        <textarea name="project_instructions_{{ loop_idx }}" rows="3"
                                   class="w-full px-3 py-1.5 bg-slate-50 border border-slate-300 rounded-lg font-mono text-[11px]">{{ mod.project_instructions }}</textarea>
+                    </div>
+
+                    <!-- Editor Kriteria & Bobot Penilaian Asli PDF -->
+                    <div class="space-y-2 border-t border-slate-100 pt-3">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-bold text-slate-700">
+                                <i class="fa-solid fa-list-check mr-1 text-indigo-600"></i>
+                                Kriteria &amp; Bobot Penilaian (Otomatis dari PDF)
+                            </span>
+                            <button type="button"
+                                    @click="criteriaList.push({name: '', weight: 0, is_mandatory: false, mandatory_min_score: 60, evidence_indicators: '', description: ''})"
+                                    class="px-2.5 py-1 rounded-lg bg-indigo-50 hover:bg-indigo-100 text-indigo-700 text-[11px] font-bold transition">
+                                <i class="fa-solid fa-plus mr-1"></i> Tambah Kriteria
+                            </button>
+                        </div>
+
+                        <div class="space-y-2">
+                            <template x-for="(crit, cIdx) in criteriaList" :key="cIdx">
+                                <div class="grid grid-cols-1 sm:grid-cols-12 gap-2 items-start bg-slate-50 p-2.5 rounded-xl border border-slate-200/80 text-xs">
+                                    <div class="sm:col-span-3">
+                                        <label class="block text-[10px] font-semibold text-slate-500 mb-0.5">Nama Kriteria</label>
+                                        <input type="text" name="crit_name_{{ loop_idx }}[]" x-model="crit.name" required
+                                               class="w-full px-2 py-1 bg-white border border-slate-300 rounded-lg font-semibold">
+                                    </div>
+                                    <div class="sm:col-span-1">
+                                        <label class="block text-[10px] font-semibold text-slate-500 mb-0.5">Bobot %</label>
+                                        <input type="number" step="0.01" min="0" max="100" name="crit_weight_{{ loop_idx }}[]" x-model="crit.weight" required
+                                               class="w-full px-2 py-1 bg-white border border-slate-300 rounded-lg text-center font-bold text-indigo-700">
+                                    </div>
+                                    <div class="sm:col-span-2">
+                                        <label class="block text-[10px] font-semibold text-slate-500 mb-0.5">Sifat / Min</label>
+                                        <div class="flex gap-1">
+                                            <input type="hidden" name="crit_mandatory_{{ loop_idx }}[]" :value="crit.is_mandatory ? '1' : '0'">
+                                            <select :value="crit.is_mandatory ? '1' : '0'"
+                                                    @change="crit.is_mandatory = ($event.target.value === '1')"
+                                                    class="w-full px-1.5 py-1 bg-white border border-slate-300 rounded-lg text-[11px]">
+                                                <option value="1">Wajib</option>
+                                                <option value="0">Opsional</option>
+                                            </select>
+                                            <input type="number" step="1" min="0" max="100" name="crit_min_score_{{ loop_idx }}[]" x-model="crit.mandatory_min_score"
+                                                   class="w-14 px-1.5 py-1 bg-white border border-slate-300 rounded-lg text-center text-[11px]">
+                                        </div>
+                                    </div>
+                                    <div class="sm:col-span-5">
+                                        <label class="block text-[10px] font-semibold text-slate-500 mb-0.5">Indikator &amp; Deskripsi</label>
+                                        <input type="text" name="crit_indicator_{{ loop_idx }}[]" x-model="crit.evidence_indicators"
+                                               class="w-full px-2 py-1 bg-white border border-slate-300 rounded-lg text-[11px]">
+                                        <input type="hidden" name="crit_description_{{ loop_idx }}[]" :value="crit.description">
+                                    </div>
+                                    <div class="sm:col-span-1 flex justify-end pt-4">
+                                        <button type="button" @click="criteriaList.splice(cIdx, 1)" x-show="criteriaList.length > 1"
+                                                class="p-1.5 text-rose-500 hover:bg-rose-50 rounded-lg" title="Hapus Kriteria">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                            </template>
+                        </div>
                     </div>
 
                     <input type="hidden" name="description_{{ loop_idx }}" value="{{ mod.description }}">
                     <input type="hidden" name="competencies_measured_{{ loop_idx }}" value="{{ mod.competencies_measured }}">
-                    <input type="hidden" name="passing_grade_{{ loop_idx }}" value="{{ mod.passing_grade }}">
+                    <input type="hidden" name="source_file_{{ loop_idx }}" value="{{ mod.source_file }}">
                 </div>
             {% endfor %}
         </div>
 
         <div class="sticky bottom-4 bg-white/95 backdrop-blur-xs border border-slate-300 p-4 rounded-2xl shadow-xl flex items-center justify-between">
             <span class="text-xs text-slate-600">
-                Centang modul yang ingin disimpan. Modul yang sudah ada akan otomatis diperbarui.
+                Centang modul yang ingin disimpan. Materi baru selalu ditambahkan beserta rubrik dan kriteria spesifiknya.
             </span>
             <div class="flex items-center space-x-3">
                 <a href="{{ url_for('materials.import_pdf') }}" class="px-4 py-2 border border-slate-300 text-xs font-semibold rounded-xl text-slate-700 hover:bg-slate-50">
